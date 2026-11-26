@@ -31,5 +31,7 @@ output/*.json
 output/*.pdf
 !output/.gitkeep
 
-# Local status (not for git)
+# Local status and agent workspace folders (not for git)
 STATUS.md
+.agents/
+.claude/
