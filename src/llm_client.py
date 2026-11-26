@@ -21,13 +21,13 @@ DEPRECATED_MODEL_PREFIXES = ("gemini-1.5", "gemini-2.0", "gemini-2.5")
 # Упорядоченная цепочка актуальных моделей для автоматического failover при 503 / 429 / 404
 FALLBACK_MODELS: tuple[str, ...] = (
     "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
-    "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemma-4-31b-it",
     "gemma-4-26b-a4b-it",
+    "gemma-4-31b-it",
 )
 
 
@@ -144,7 +144,12 @@ class LLMClient:
                     if "401" in err_str or "403" in err_str or "api_key_invalid" in err_lower:
                         raise RuntimeError(f"Ошибка авторизации Gemini API: {e}") from e
 
-                    if "404" in err_str or "limit: 0" in err_lower or "no longer available" in err_lower:
+                    if (
+                        "404" in err_str
+                        or "limit: 0" in err_lower
+                        or "no longer available" in err_lower
+                        or "generaterequestsperday" in err_lower
+                    ):
                         unavailable_models.add(candidate)
                         continue
 

@@ -243,4 +243,90 @@ def run_deterministic_checks(document_text: str) -> list[Defect]:
                 recommendation="Привести типы полей к единому формату (например, `integer` для `amount`, `boolean`/`integer` для `enabled` во всех контрактах).",
             )
 
+    # 11. Конфликт даты покупки vs даты проводки в критериях приёмки
+    if re.search(r"по дате (?:совершения )?покупки", text_lower) and re.search(r"критерии приемки|критерии приёмки", text_lower):
+        ru_months = (
+            r"(январ[яеь]|феврал[яеь]|март[ае]?|апрел[яеь]|ма[яей]|июн[яеь]|"
+            r"июл[яеь]|август[ае]?|сентябр[яеь]|октябр[яеь]|ноябр[яеь]|декабр[яеь])"
+        )
+        ru_month_adj = (
+            r"(январск|февральск|мартовск|апрельск|майск|июньск|"
+            r"июльск|августовск|сентябрьск|октябрьск|ноябрьск|декабрьск)"
+        )
+        ac_block_match = re.search(
+            r"###\s*Критерии при[её]мки.*?(?=\n###|\n---|\Z)",
+            document_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if ac_block_match:
+            for row in ac_block_match.group(0).splitlines():
+                if "|" not in row:
+                    continue
+                cols = [c.strip() for c in row.strip("|").split("|")]
+                if len(cols) >= 3:
+                    m_buy = re.search(ru_months, cols[0], re.IGNORECASE)
+                    m_post = re.search(ru_months, cols[1], re.IGNORECASE)
+                    m_res = re.search(ru_month_adj, cols[2], re.IGNORECASE)
+                    if m_buy and m_post and m_res:
+                        buy_stem = m_buy.group(1)[:4].lower()
+                        post_stem = m_post.group(1)[:4].lower()
+                        res_stem = m_res.group(1)[:4].lower()
+                        if buy_stem != post_stem and res_stem == post_stem:
+                            add_finding(
+                                severity=Severity.CRITICAL,
+                                criterion="Взаимная непротиворечивость (ФТ vs Критерии приёмки)",
+                                description=(
+                                    "Прямое логическое противоречие между Ф-2 («месяц определяется по дате совершения покупки») "
+                                    "и таблицей «Критерии приёмки»: покупка совершена в одном месяце, проведена в следующем, "
+                                    "но ожидаемый результат относит её к счётчику месяца проводки (клиринга)."
+                                ),
+                                quote=row.strip(),
+                                recommendation=(
+                                    "Устранить конфликт: либо изменить ожидаемый результат приёмки на месяц покупки, "
+                                    "либо уточнить в Ф-2 расчёт по дате финансовой проводки (клиринга)."
+                                ),
+                            )
+                            break
+
+    # 12. Отсутствие REST-метода для чтения настроек/расходов при его упоминании в Части A/Description
+    mentions_read = bool(
+        re.search(r"читает и сохраняет|чтение порога|сумма за месяц", text_lower)
+    )
+    endpoints_found = set(re.findall(r"`(/[A-Za-z0-9_/-]+)`", document_text))
+    has_only_save_endpoint = (
+        len(endpoints_found) == 1
+        and any(word in ep.lower() for ep in endpoints_found for word in ("save", "create", "update", "set"))
+    )
+    if mentions_read and has_only_save_endpoint:
+        only_ep = next(iter(endpoints_found))
+        add_finding(
+            severity=Severity.MAJOR,
+            criterion="Системная полнота набора / API контракты",
+            description=(
+                f"В документе заявлено чтение настроек и отображение суммы расходов за месяц "
+                f"(UI, Интеграция, Description), однако в Части B описан только мутирующий эндпоинт `{only_ep}` "
+                "и полностью отсутствует метод чтения (`GET`) текущих настроек и накопленной суммы."
+            ),
+            quote="Приложение читает и сохраняет настройки... | Description: Сохранение порога. Функциональные требования: чтение порога",
+            recommendation=(
+                "Добавить в Часть B спецификацию эндпоинта `GET` для получения текущего порога, статуса уведомления "
+                "и суммы расходов за текущий месяц (например, `GET /alerts/limit`)."
+            ),
+        )
+
+    # 13. Противоречие «вернуть прежнее состояние» vs структура ERROR-ответа без amount/enabled
+    if "вернуть прежнее состояние" in text_lower:
+        error_json = re.search(r'\{"result"\s*:\s*"ERROR"[^}]*\}', document_text)
+        if error_json and ("amount" not in error_json.group(0) or "enabled" not in error_json.group(0)):
+            add_finding(
+                severity=Severity.MAJOR,
+                criterion="Полнота и непротиворечивость API-ответа",
+                description=(
+                    "В п.5 логики метода требуется при отклонении суммы «вернуть прежнее состояние и результат ERROR», "
+                    "но пример ответа ошибки содержит только `result` и `message` без полей `amount` и `enabled` прежней настройки."
+                ),
+                quote=f"вернуть прежнее состояние и результат ERROR -> {error_json.group(0)}",
+                recommendation="Уточнить: либо включать текущие сохранённые `amount`/`enabled` в тело ошибки, либо убрать требование возврата прежнего состояния при ошибке 400/422.",
+            )
+
     return findings

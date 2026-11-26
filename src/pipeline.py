@@ -51,19 +51,66 @@ def _severity_rank(sev: Severity | str) -> int:
     return {"CRITICAL": 0, "MAJOR": 1, "MINOR": 2}.get(val, 3)
 
 
+def _defect_topic_key(defect: Defect) -> str:
+    """Определить смысловой ключ дефекта для устранения дубликатов между агентами."""
+    haystack = f"{defect.criterion} {defect.description} {defect.quote}".lower()
+    topic_patterns: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("error_prev_state", ("вернуть прежнее состояние",)),
+        ("http_200_error", ('"result":"error"', '"result": "error"', "бизнес-ошибкой", "бизнес-ошибок")),
+        ("http_200_created", ("смешивает код 200", "ошибочно назван 'created'", "названа 'successful", "соответствует http 201", "соответствует коду 201")),
+        ("prod_swagger_missing", ("prod url", "swagger")),
+        ("missing_read_endpoint", ("чтение порога", "читает и сохраняет", "метод чтения", "получения текущего порога")),
+        ("purchase_vs_clearing", ("31 январ", "1 феврал", "датой покупки", "дате совершения покупки")),
+        ("empty_tests", ("заполняются тестировщиками", "секция тестирования", "раздел тестирования")),
+        ("empty_checklist", ("чек-лист", "да / нет")),
+        ("empty_approvals", ("блок согласующих",)),
+        ("jira_missing", ("jira", "таск-трекере")),
+        ("content_type_body", ("content-type", "тело не используется")),
+        ("tiyn_tenge", ("тиын", "тенге")),
+        ("type_mismatch", ("integer", "string", "тип")),
+        ("http_403_404", ("403", "404")),
+        ("get_mutation", ("http get", "метод get", "get для операции", "get для сохранения", "savelimit использует get", "rest type: get")),
+        ("query_leak", ("query string", "query-параметр", "строке запроса")),
+        ("idempotency", ("идемпотентност", "повторная доставка")),
+    )
+    for topic, keywords in topic_patterns:
+        if topic in ("http_403_404", "tiyn_tenge", "type_mismatch", "content_type_body"):
+            if all(kw in haystack for kw in keywords):
+                return topic
+        elif any(kw in haystack for kw in keywords):
+            return topic
+    return " ".join(defect.description.lower().split())[:60]
+
+
 def _deduplicate_defects(defects: list[Defect]) -> list[Defect]:
-    """Убрать дубликаты дефектов и присвоить единые сквозные ID."""
-    seen: set[tuple[str, str]] = set()
-    unique: list[Defect] = []
+    """Объединить смысловые дубликаты дефектов по (requirement_id, тема) и присвоить ID."""
+    grouped: dict[tuple[str, str], Defect] = {}
 
     for d in sorted(defects, key=lambda x: (_severity_rank(x.severity), x.requirement_id)):
-        norm_desc = " ".join(d.description.lower().split())[:70]
-        key = (d.requirement_id, norm_desc)
-        if key in seen:
+        key = (d.requirement_id, _defect_topic_key(d))
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = d.model_copy()
             continue
-        seen.add(key)
-        unique.append(d)
 
+        # Объединяем источники и оставляем самую высокую критичность / информативное описание
+        agents = [a.strip() for a in existing.source_agent.split(",") if a.strip()]
+        for a in d.source_agent.split(","):
+            a = a.strip()
+            if a and a not in agents:
+                agents.append(a)
+        existing.source_agent = ", ".join(agents)
+
+        if _severity_rank(d.severity) < _severity_rank(existing.severity):
+            existing.severity = d.severity
+        if len(d.description) > len(existing.description) and existing.source_agent.split(",")[0] != "RuleEngine":
+            existing.description = d.description
+        if len(d.recommendation) > len(existing.recommendation):
+            existing.recommendation = d.recommendation
+        if not existing.quote and d.quote:
+            existing.quote = d.quote
+
+    unique = sorted(grouped.values(), key=lambda x: (_severity_rank(x.severity), x.requirement_id))
     for idx, d in enumerate(unique, 1):
         d.id = f"DEF-{idx:03d}"
 
@@ -150,10 +197,6 @@ def run_pipeline(
     consistency_reviewer = ConsistencyReviewer(llm)
     set_review = consistency_reviewer.review_full_set(document_text, rule_findings=rule_defects)
 
-    # Объединяем системные дефекты набора + находки RuleEngine и убираем дубли
-    combined_set_defects = _deduplicate_defects(rule_defects + set_review.defects)
-    set_review.defects = combined_set_defects
-
     # Формируем RequirementReview для каждого требования
     req_defects_map: dict[str, list[Defect]] = {req.id: [] for req in requirements}
     orphan_defects: list[Defect] = []
@@ -162,10 +205,17 @@ def run_pipeline(
         if d.requirement_id in req_defects_map:
             req_defects_map[d.requirement_id].append(d)
         else:
+            d.requirement_id = "SET"
             orphan_defects.append(d)
 
-    if orphan_defects:
-        set_review.defects = _deduplicate_defects(set_review.defects + orphan_defects)
+    # Нормализуем requirement_id для системных дефектов и объединяем с RuleEngine
+    normalized_set_defects: list[Defect] = []
+    for d in set_review.defects:
+        if d.requirement_id not in req_defects_map:
+            d.requirement_id = "SET"
+        normalized_set_defects.append(d)
+
+    set_review.defects = _deduplicate_defects(rule_defects + normalized_set_defects + orphan_defects)
 
     requirement_reviews: list[RequirementReview] = []
     requirements_clean = 0
@@ -241,7 +291,12 @@ def run_pipeline(
         verdict += f" (Примечание: частичные сбои модулей: {'; '.join(reviewer_errors)})"
 
     action_items: list[str] = []
+    seen_topics: set[str] = set()
     for d in sorted(all_defects, key=lambda x: _severity_rank(x.severity)):
+        topic = _defect_topic_key(d)
+        if topic in seen_topics:
+            continue
+        seen_topics.add(topic)
         item = f"**[{d.severity.value}]** {d.description}"
         if d.recommendation:
             item += f" → *{d.recommendation}*"

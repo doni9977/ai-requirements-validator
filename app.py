@@ -32,10 +32,12 @@ with st.sidebar:
         type="password",
         help="Бесплатный ключ на https://aistudio.google.com/",
     )
+    available_models = ["gemini-4-hydrogen", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
+    default_idx = available_models.index(env_cfg.gemini_model) if env_cfg.gemini_model in available_models else 0
     model_name = st.selectbox(
         "Модель LLM",
-        options=["gemini-4-hydrogen", "gemini-4-neon", "gemini-4-carbon", "gemini-3.5-flash-lite"],
-        index=0,
+        options=available_models,
+        index=default_idx,
     )
     st.divider()
     st.markdown("**Архитектура пайплайна:**")

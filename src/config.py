@@ -21,11 +21,11 @@ class Config:
     report_language: str = "ru"
 
     # Внутренние параметры выполнения
-    max_retries: int = 3
+    max_retries: int = 2
     temperature: float = 0.15
     max_output_tokens: int = 8192
     max_workers: int = 2
-    request_timeout_sec: float = 90.0
+    request_timeout_sec: float = 50.0
     thinking_level: str = "low"
 
     @classmethod

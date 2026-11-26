@@ -177,7 +177,7 @@ class ValidatorTests(unittest.TestCase):
         findings = run_deterministic_checks(text)
         combined = "\n".join(f"{f.description} {f.quote}".lower() for f in findings)
 
-        self.assertGreaterEqual(len(findings), 10)
+        self.assertGreaterEqual(len(findings), 12)
         self.assertIn("http get", combined)
         self.assertIn("error", combined)
         self.assertIn("404", combined)
@@ -187,6 +187,15 @@ class ValidatorTests(unittest.TestCase):
         self.assertIn("чек-лист ревью", combined)
         self.assertIn("amount", combined)
         self.assertIn("enabled", combined)
+        self.assertIn("31 января", combined)
+        self.assertIn("метод чтения", combined)
+        self.assertIn("прежнее состояние", combined)
+
+        # Проверяем, что дедупликация разделяет конфликт 200+ERROR и конфликт возврата прежнего состояния
+        from src.pipeline import _deduplicate_defects
+
+        deduped = _deduplicate_defects(findings)
+        self.assertEqual(len(deduped), len(findings))
 
     def test_deprecated_model_auto_upgrade(self) -> None:
         self.assertEqual(LLMClient._resolve_model("gemini-2.5-flash"), "gemini-4-hydrogen")

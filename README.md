@@ -113,7 +113,7 @@ python -m unittest discover -s tests -v
 | Переменная | Описание | По умолчанию |
 | :--- | :--- | :--- |
 | `GEMINI_API_KEY` | API-ключ Google AI Studio | (обязательно) |
-| `GEMINI_MODEL` | Модель Gemini (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-carbon`) | `gemini-4-hydrogen` |
+| `GEMINI_MODEL` | Модель Gemini (`gemini-4-hydrogen`, `gemini-3.6-flash`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`) | `gemini-4-hydrogen` |
 | `REPORT_LANGUAGE` | Язык отчёта | `ru` |
 
 ---
