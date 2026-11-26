@@ -26,12 +26,11 @@ st.caption("BCC-HUB × MNU FinTech Hackathon 2026 · Статический ау
 with st.sidebar:
     st.header("⚙️ Настройки агента")
     env_cfg = Config.load()
-    api_key = st.text_input(
-        "Gemini API Key",
-        value=env_cfg.gemini_api_key if env_cfg.gemini_api_key != "your_gemini_api_key_here" else "",
-        type="password",
-        help="Бесплатный ключ на https://aistudio.google.com/",
-    )
+    if not env_cfg.validate():
+        st.success("🔐 Gemini API: подключён на сервере (`.env`)")
+    else:
+        st.error("🔑 Задайте `GEMINI_API_KEY` в `.env` на сервере (ключ не передаётся на фронтенд).")
+
     available_models = ["gemini-4-hydrogen", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"]
     default_idx = available_models.index(env_cfg.gemini_model) if env_cfg.gemini_model in available_models else 0
     model_name = st.selectbox(
@@ -72,11 +71,14 @@ if source_mode.startswith("Загрузить"):
 run_btn = st.button("🚀 Запустить проверку ТЗ", type="primary", use_container_width=True)
 
 if run_btn:
-    if not api_key:
-        st.error("Укажите Gemini API Key в боковой панели или в файле `.env`.")
+    cfg = Config.load()
+    cfg_errors = cfg.validate()
+    if cfg_errors:
+        for err in cfg_errors:
+            st.error(err)
         st.stop()
 
-    cfg = Config(gemini_api_key=api_key, gemini_model=model_name or DEFAULT_GEMINI_MODEL)
+    cfg.gemini_model = model_name or cfg.gemini_model or DEFAULT_GEMINI_MODEL
 
     target_path: str
     tmp_file_path: Path | None = None
